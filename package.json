@@ -1,0 +1,33 @@
+{
+  "name": "petshop-landing",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@heroicons/react": "^2.2.0",
+    "@radix-ui/themes": "^3.2.1",
+    "@supabase/supabase-js": "^2.49.1",
+    "@tabler/icons-react": "^3.31.0",
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.9.2",
+    "lucide-react": "^0.501.0",
+    "next": "13.0.5",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "react-qr-code": "^2.0.15",
+    "tailwind-merge": "^3.2.0",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.13",
+    "postcss": "^8.4.19",
+    "react-icons": "^4.7.1",
+    "swiper": "^8.4.5",
+    "tailwindcss": "^3.2.4"
+  }
+}
