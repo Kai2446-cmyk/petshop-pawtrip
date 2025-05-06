@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabase";
 import { useRouter } from "next/router";
 import Image from "next/image";
@@ -13,17 +13,46 @@ export default function Register() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
+  // Fungsi cek apakah profile belum lengkap
+  const isProfileIncomplete = (profile) => {
+    return (
+      !profile ||
+      !profile.full_name?.trim() ||
+      !profile.address?.trim() ||
+      !profile.phone?.trim() ||
+      !profile.role?.trim()
+    );
+  };
+
+  const checkAndRedirect = async (userId) => {
+    const { data: profile, error } = await supabase
+      .from("profiles")
+      .select("full_name, address, phone, role")
+      .eq("id", userId)
+      .single();
+
+    if (error) {
+      console.error("Gagal ambil profile:", error.message);
+      return router.replace("/complete-profile");
+    }
+
+    if (isProfileIncomplete(profile)) {
+      router.replace("/complete-profile");
+    } else {
+      router.replace("/");
+    }
+  };
+
   const handleRegister = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError("");
     setMessage("");
 
-    const { error } = await supabase.auth.signUp(
+    const { data, error } = await supabase.auth.signUp(
       { email, password },
       {
         options: {
-          // setelah verifikasi, user akan diarahkan ke /login di production
           emailRedirectTo: `${process.env.NEXT_PUBLIC_BASE_URL}/login`,
         },
       }
@@ -32,11 +61,27 @@ export default function Register() {
     if (error) {
       setError(error.message);
     } else {
-      setMessage("Cek email Anda untuk verifikasi. Setelah konfirmasi, silakan login.");
+      const user = data?.user;
+
+      if (user?.email_confirmed_at || user?.confirmed_at) {
+        await checkAndRedirect(user.id);
+      } else {
+        setMessage(
+          "Cek email Anda untuk verifikasi. Setelah konfirmasi, silakan login."
+        );
+      }
     }
 
     setLoading(false);
   };
+
+  useEffect(() => {
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
+      if (user?.id) {
+        await checkAndRedirect(user.id);
+      }
+    });
+  }, []);
 
   return (
     <div className="relative h-screen w-screen flex justify-center items-center">

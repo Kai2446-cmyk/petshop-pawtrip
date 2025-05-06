@@ -12,36 +12,89 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  // Tangani callback magic link / OAuth
-  useEffect(() => {
-    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-      if ((event === "SIGNED_IN" || event === "USER_UPDATED") && session) {
-        router.replace("/"); // sukses login → beranda
+  const isProfileIncomplete = (profile) => {
+    const incomplete =
+      !profile ||
+      !profile.full_name?.trim() ||
+      !profile.address?.trim() ||
+      !profile.phone?.trim() ||
+      !profile.role?.trim() ||
+      !profile.avatar_url?.trim();
+
+    console.log("📦 Profile:", profile);
+    console.log("❗ Is profile incomplete?", incomplete);
+    return incomplete;
+  };
+
+  const checkAndRedirect = async (userId) => {
+    try {
+      const { data: profile, error } = await supabase
+        .from("profiles")
+        .select("full_name, address, phone, role, avatar_url")
+        .eq("id", userId)
+        .single();
+
+      if (error) {
+        console.error("⚠️ Gagal ambil profil:", error.message);
+        router.replace("/complete-profile");
+        return;
       }
-    });
-    return () => authListener.subscription.unsubscribe();
-  }, [router]);
+
+      if (isProfileIncomplete(profile)) {
+        router.replace("/complete-profile");
+      } else {
+        router.replace("/");
+      }
+    } catch (err) {
+      console.error("🔥 Error saat checkAndRedirect:", err);
+      router.replace("/complete-profile");
+    }
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError("");
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
 
-    if (error) {
-      setError(error.message);
+    if (signInError) {
+      setError(signInError.message);
       setLoading(false);
+      return;
     }
-    // jika success, listener di useEffect akan redirect
+
+    const { data: userData } = await supabase.auth.getUser();
+    const user = userData?.user;
+
+    if (user?.id) {
+      await checkAndRedirect(user.id);
+    } else {
+      setError("Gagal mengambil data user.");
+    }
+
+    setLoading(false);
   };
+
+  useEffect(() => {
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if ((event === "SIGNED_IN" || event === "USER_UPDATED") && session?.user?.id) {
+          await checkAndRedirect(session.user.id);
+        }
+      }
+    );
+
+    return () => {
+      authListener?.subscription.unsubscribe();
+    };
+  }, []);
 
   return (
     <div className="relative h-screen w-screen flex justify-center items-center">
-      {/* Background */}
       <div className="absolute inset-0">
         <div
           className="absolute inset-0 bg-cover bg-center opacity-80"
@@ -50,13 +103,11 @@ export default function Login() {
         <div className="absolute inset-0 bg-black opacity-20"></div>
       </div>
 
-      {/* Title */}
       <h1 className="absolute top-10 text-3xl md:text-4xl font-bold text-white text-center">
         Selamat Datang di <br />
         <span className="text-yellow-300">PawTrip PetShop</span> 🐾
       </h1>
 
-      {/* Form */}
       <div className="relative z-10 bg-[#BDA697] bg-opacity-95 p-8 rounded-2xl shadow-lg w-[400px] text-center">
         <h2 className="text-2xl font-bold mb-4">Login</h2>
 
