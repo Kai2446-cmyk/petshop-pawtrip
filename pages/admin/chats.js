@@ -1,3 +1,4 @@
+// pages/admin/chats.js
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { useRouter } from "next/router";
@@ -13,7 +14,6 @@ export default function AdminChatPage() {
   const [imageFile, setImageFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [unreadCounts, setUnreadCounts] = useState({});
-  const [typingStatus, setTypingStatus] = useState({});
   const router = useRouter();
   const messagesEndRef = useRef(null);
 
@@ -28,11 +28,11 @@ export default function AdminChatPage() {
   };
   useEffect(scrollToBottom, [messages]);
 
-  // Fetch users and unread messages
   const fetchUsersWithMessages = async () => {
     const { data: chats } = await supabase.from("chats").select("*");
     const unread = {};
     const userIds = new Set();
+
     chats.forEach((c) => {
       if (c.sender_id !== adminId) {
         userIds.add(c.sender_id);
@@ -41,11 +41,21 @@ export default function AdminChatPage() {
         }
       }
     });
+
     const { data: profiles } = await supabase
       .from("profiles")
       .select("id, full_name, avatar_url, is_online")
       .in("id", Array.from(userIds));
-    setUsers(profiles || []);
+
+    let ordered = profiles || [];
+    if (selectedUser) {
+      ordered = [
+        ...(ordered.filter((u) => u.id === selectedUser.id)),
+        ...(ordered.filter((u) => u.id !== selectedUser.id)),
+      ];
+    }
+
+    setUsers(ordered);
     setUnreadCounts(unread);
   };
 
@@ -72,6 +82,7 @@ export default function AdminChatPage() {
         `and(sender_id.eq.${adminId},receiver_id.eq.${userId})`
       )
       .order("created_at", { ascending: true });
+
     setMessages(data || []);
     await markMessagesAsRead(userId);
     await fetchUsersWithMessages();
@@ -81,19 +92,17 @@ export default function AdminChatPage() {
     if (!adminId) return;
     fetchUsersWithMessages();
 
-    // Subscribe to changes in the 'chats' table to update real-time
     const channel = supabase
       .channel("admin-chat")
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "chats" },
         ({ new: m }) => {
-          // If the message is related to the selected user, update messages
           if (
             selectedUser &&
             (m.sender_id === selectedUser.id || m.receiver_id === selectedUser.id)
           ) {
-            setMessages((prevMessages) => [...prevMessages, m]);
+            setMessages((prev) => [...prev, m]);
           }
           fetchUsersWithMessages();
         }
@@ -101,16 +110,8 @@ export default function AdminChatPage() {
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "chats" },
-        () => {
-          fetchUsersWithMessages();
-        }
+        fetchUsersWithMessages
       )
-      .on("broadcast", { event: "typing" }, (payload) => {
-        setTypingStatus((prev) => ({
-          ...prev,
-          [payload.payload.userId]: payload.payload.isTyping,
-        }));
-      })
       .subscribe();
 
     return () => supabase.removeChannel(channel);
@@ -123,6 +124,7 @@ export default function AdminChatPage() {
 
   const handleSendMessage = async () => {
     if ((!input.trim() && !imageFile) || !selectedUser) return;
+
     if (imageFile) {
       const fn = uuidv4() + "." + imageFile.name.split(".").pop();
       const fp = `chat_images_admin/${fn}`;
@@ -130,6 +132,7 @@ export default function AdminChatPage() {
       const { data: urlData } = supabase.storage
         .from("bucketadmin")
         .getPublicUrl(fp);
+
       await supabase.from("chats").insert({
         sender_id: adminId,
         receiver_id: selectedUser.id,
@@ -137,19 +140,20 @@ export default function AdminChatPage() {
         is_image: true,
         is_read: false,
       });
+
       setImageFile(null);
       setPreviewUrl(null);
-      fetchMessages(selectedUser.id);
-      return;
+    } else {
+      await supabase.from("chats").insert({
+        sender_id: adminId,
+        receiver_id: selectedUser.id,
+        message: input.trim(),
+        is_read: false,
+      });
+      setInput("");
     }
-    await supabase.from("chats").insert({
-      sender_id: adminId,
-      receiver_id: selectedUser.id,
-      message: input.trim(),
-      is_read: false,
-    });
-    setInput("");
-    fetchMessages(selectedUser.id);
+
+    await fetchMessages(selectedUser.id);
   };
 
   const handleFileChange = (e) => {
@@ -159,18 +163,28 @@ export default function AdminChatPage() {
     setPreviewUrl(URL.createObjectURL(f));
   };
 
-  // Render message - checking for image URLs
   const renderMessage = (msg) => {
-    if (msg.message && /\.(jpe?g|png|gif|webp|bmp|svg)$/i.test(msg.message)) {
+    const text = msg.message || "";
+    const isPureImageUrl = /\.(jpe?g|png|gif|webp|bmp|svg)$/i.test(text.trim());
+    const containsHtml = /<\/?[a-z][\s\S]*>/i.test(text);
+    if (containsHtml) {
+      return <div dangerouslySetInnerHTML={{ __html: text }} />;
+    } else if (isPureImageUrl) {
       return (
         <img
-          src={msg.message}
+          src={text}
           alt="Sent"
           className="rounded-lg max-w-full max-h-64 object-contain"
         />
       );
+    } else {
+      return text;
     }
-    return msg.message;
+  };
+
+  const formatTime = (timestamp) => {
+    const date = new Date(timestamp);
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
 
   return (
@@ -186,9 +200,7 @@ export default function AdminChatPage() {
             <span>Kembali</span>
           </button>
         </div>
-        {users.length === 0 && (
-          <p className="text-gray-500">Belum ada pesan masuk.</p>
-        )}
+        {users.length === 0 && <p className="text-gray-500">Belum ada pesan masuk.</p>}
         {users.map((u) => (
           <div
             key={u.id}
@@ -237,18 +249,17 @@ export default function AdminChatPage() {
                 return (
                   <div
                     key={msg.id}
-                    className={`flex ${
-                      isSender ? "justify-end" : "justify-start"
-                    }`}
+                    className={`flex ${isSender ? "justify-end" : "justify-start"}`}
                   >
                     <div
                       className={`max-w-xs p-3 rounded-xl shadow text-sm ${
-                        isSender
-                          ? "bg-orange-100 text-right"
-                          : "bg-gray-100 text-left"
+                        isSender ? "bg-orange-100 text-right" : "bg-gray-100 text-left"
                       }`}
                     >
-                      {renderMessage(msg)}
+                      <div>{renderMessage(msg)}</div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {formatTime(msg.created_at)}
+                      </div>
                     </div>
                   </div>
                 );
@@ -256,7 +267,7 @@ export default function AdminChatPage() {
               <div ref={messagesEndRef} />
             </div>
 
-            <div className="flex items-center gap-3 mt-4">  
+            <div className="flex items-center gap-3 mt-4">
               <input
                 type="file"
                 accept="image/*"

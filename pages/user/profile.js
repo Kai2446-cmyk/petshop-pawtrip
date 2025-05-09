@@ -6,20 +6,23 @@ import { motion, AnimatePresence } from "framer-motion";
 export default function ProfilePage() {
   const [profile, setProfile] = useState(null);
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({ full_name: "", gender: "", alamat: "", telepon: "" });
+  const [form, setForm] = useState({ full_name: "", gender: "", address: "", phone: "", email: "" });
   const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     const getProfile = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       const { data } = await supabase.from("profiles").select("*").eq("id", user.id).single();
-      setProfile(data);
-      setForm({
-        full_name: data?.full_name || "",
-        gender: data?.gender || "",
-        alamat: data?.alamat || "",
-        telepon: data?.telepon || "",
-      });
+      if (data) {
+        setProfile(data);
+        setForm({
+          full_name: data.full_name || "",
+          gender: data.gender || "",
+          address: data.address || "",
+          phone: data.phone || "",
+          email: data.email || user.email || "",
+        });
+      }
     };
     getProfile();
   }, []);
@@ -31,7 +34,13 @@ export default function ProfilePage() {
   const handleSave = async () => {
     const { error } = await supabase
       .from("profiles")
-      .update(form)
+      .update({
+        full_name: form.full_name,
+        gender: form.gender,
+        address: form.address,
+        phone: form.phone,
+        email: form.email,
+      })
       .eq("id", profile.id);
 
     if (!error) {
@@ -39,6 +48,7 @@ export default function ProfilePage() {
       setEditing(false);
     } else {
       alert("Gagal menyimpan perubahan profil.");
+      console.error("Supabase Error:", error);
     }
   };
 
@@ -87,7 +97,7 @@ export default function ProfilePage() {
             <div className="relative group">
               <img
                 src={profile?.avatar_url || "/default-avatar.png"}
-                className="w-24 h-24 rounded-full border shadow-md"
+                className="w-24 h-24 rounded-full border shadow-md object-cover"
                 alt="avatar"
               />
               {editing && (
@@ -105,8 +115,8 @@ export default function ProfilePage() {
               )}
             </div>
             <div>
-              <h2 className="text-3xl font-bold">{profile?.full_name}</h2>
-              <p className="text-gray-500">{profile?.email}</p>
+              <h2 className="text-3xl font-bold">{form.full_name}</h2>
+              <p className="text-gray-500">{form.email}</p>
             </div>
           </div>
           <button
@@ -128,10 +138,12 @@ export default function ProfilePage() {
             transition={{ duration: 0.25, ease: "easeOut" }}
             className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4 mx-2 pb-2"
           >
-            {["full_name", "gender", "alamat", "telepon"].map((field) => (
+            {["full_name", "gender", "address", "phone", "email"].map((field) => (
               <div key={field}>
                 <label className="text-black text-xl capitalize">
-                  {field.replace("_", " ")}
+                  {field === "full_name"
+                    ? "Nama Lengkap"
+                    : field.charAt(0).toUpperCase() + field.slice(1)}
                 </label>
                 {editing ? (
                   field === "gender" ? (
@@ -147,7 +159,7 @@ export default function ProfilePage() {
                     </select>
                   ) : (
                     <input
-                      type="text"
+                      type={field === "email" ? "email" : "text"}
                       name={field}
                       value={form[field]}
                       onChange={handleChange}

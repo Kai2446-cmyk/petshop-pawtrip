@@ -1,16 +1,31 @@
-import { useEffect, useState, useRef } from "react";
+// components/ChatBox.js
+import { useEffect, useState, useRef, useCallback } from "react";
 import { supabase } from "../lib/supabase";
 import { v4 as uuidv4 } from "uuid";
 import { ImagePlus } from "lucide-react";
 
-export default function ChatBox({ userId, adminId, onClose, adminStatus }) {
+export default function ChatBox({
+  userId,
+  adminId,
+  onClose,
+  adminStatus,
+  initialMessage,
+}) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(true);
   const [imageFile, setImageFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const messagesEndRef = useRef();
+  const hasSentInitial = useRef(false);
 
+  // helper: format timestamp HH:MM
+  const formatTime = (iso) => {
+    const d = new Date(iso);
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  };
+
+  // Load & subscribe messages
   useEffect(() => {
     if (!userId || !adminId) return;
 
@@ -27,88 +42,133 @@ export default function ChatBox({ userId, adminId, onClose, adminStatus }) {
       setMessages(data || []);
       setLoading(false);
     };
+
     load();
 
     const channel = supabase
       .channel("chat-channel")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "chats" }, ({ new: m }) => {
-        if (
-          (m.sender_id === userId && m.receiver_id === adminId) ||
-          (m.sender_id === adminId && m.receiver_id === userId)
-        ) {
-          setMessages(prev => [...prev, m]);
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "chats" },
+        ({ new: m }) => {
+          if (
+            (m.sender_id === userId && m.receiver_id === adminId) ||
+            (m.sender_id === adminId && m.receiver_id === userId)
+          ) {
+            setMessages((prev) => [...prev, m]);
+          }
         }
-      })
+      )
       .subscribe();
 
-    return () => supabase.removeChannel(channel);
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [userId, adminId]);
 
-  // Mark messages as read setelah loading selesai
+  // Mark as read on load
   useEffect(() => {
-    const markMessagesAsRead = async () => {
-      if (!userId || !adminId) return;
-      await supabase
+    if (!loading && userId && adminId) {
+      supabase
         .from("chats")
         .update({ is_read: true })
         .eq("receiver_id", userId)
         .eq("sender_id", adminId)
         .eq("is_read", false);
-    };
-
-    if (!loading) {
-      markMessagesAsRead();
     }
   }, [loading, userId, adminId]);
 
+  // Scroll down tiap ada pesan baru
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const send = async () => {
-    if (!input.trim() && !imageFile) return;
+  // Helper upload gambar
+  const uploadImage = useCallback(async (file) => {
+    const ext = file.name.split(".").pop();
+    const fname = `chat_images/${uuidv4()}.${ext}`;
+    const { error } = await supabase.storage
+      .from("bucketuser")
+      .upload(fname, file);
+    if (error) {
+      console.error("Upload error:", error.message);
+      return null;
+    }
+    return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/bucketuser/${fname}`;
+  }, []);
 
-    let message = input.trim() || null;
+  // Send (bisa text-only, image-only, atau gabungan)
+  const send = useCallback(
+    async ({ text = "", imageUrl = null } = {}) => {
+      const now = new Date().toISOString();
 
-    if (imageFile) {
-      const fileName = `chat_images/${uuidv4()}.${imageFile.name.split(".").pop()}`;
-      const { data, error } = await supabase.storage.from("bucketuser").upload(fileName, imageFile);
-
-      if (error) {
-        console.error("Upload error:", error.message);
-        return;
+      // Gabung menjadi HTML jika keduanya ada
+      if (text && imageUrl) {
+        const html = `${text}<br/><img src="${imageUrl}" style="max-width:100%;border-radius:8px;margin-top:5px;"/>`;
+        const msg = {
+          sender_id: userId,
+          receiver_id: adminId,
+          message: html,
+          is_read: false,
+          created_at: now,
+        };
+        setMessages((p) => [...p, msg]);
+        await supabase.from("chats").insert(msg);
+      } else {
+        if (text) {
+          const msgText = {
+            sender_id: userId,
+            receiver_id: adminId,
+            message: text,
+            is_read: false,
+            created_at: now,
+          };
+          setMessages((p) => [...p, msgText]);
+          await supabase.from("chats").insert(msgText);
+        }
+        if (imageUrl) {
+          const msgImg = {
+            sender_id: userId,
+            receiver_id: adminId,
+            message: imageUrl,
+            is_read: false,
+            created_at: now,
+          };
+          setMessages((p) => [...p, msgImg]);
+          await supabase.from("chats").insert(msgImg);
+        }
       }
 
-      const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/bucketuser/${fileName}`;
-      message = publicUrl;
+      setInput("");
+      setImageFile(null);
+      setPreviewUrl(null);
+    },
+    [userId, adminId]
+  );
+
+  // Kirim initialMessage saat ChatBox mount
+  useEffect(() => {
+    if (initialMessage && !hasSentInitial.current && !loading) {
+      send(initialMessage);
+      hasSentInitial.current = true;
     }
+  }, [initialMessage, loading, send]);
 
-    const msg = {
-      sender_id: userId,
-      receiver_id: adminId,
-      message,
-      is_read: false,
-      created_at: new Date().toISOString(),
-    };
-
-    setMessages(prev => [...prev, msg]);
-    setInput("");
-    setImageFile(null);
-    setPreviewUrl(null);
-
-    await supabase.from("chats").insert(msg);
+  const onFile = (e) => {
+    const f = e.target.files[0];
+    if (!f || !f.type.startsWith("image/")) {
+      return alert("File harus gambar");
+    }
+    setImageFile(f);
+    setPreviewUrl(URL.createObjectURL(f));
+  };
+  const onManualSend = async () => {
+    let url = null;
+    if (imageFile) url = await uploadImage(imageFile);
+    await send({ text: input.trim(), imageUrl: url });
   };
 
-  const onFile = e => {
-    const file = e.target.files[0];
-    if (!file) return;
-    setImageFile(file);
-    setPreviewUrl(URL.createObjectURL(file));
-  };
-
-  const isImageUrl = (url) => {
-    return /\.(jpeg|jpg|gif|png)$/i.test(url);
-  };
+  const isImageUrl = (u) => /\.(jpeg|jpg|gif|png|webp)$/i.test(u);
 
   return (
     <div className="flex flex-col h-full">
@@ -126,31 +186,35 @@ export default function ChatBox({ userId, adminId, onClose, adminStatus }) {
         <button onClick={onClose} className="text-gray-500 hover:text-gray-800 text-lg">✖</button>
       </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-2 bg-gray-50">
+      {/* Pesan */}
+      <div className="flex-1 overflow-y-auto p-4 bg-gray-50 space-y-2">
         {loading && <div className="text-center text-gray-400 mt-10">Loading...</div>}
-        {!loading && messages.map((m, i) => (
-          <div
-            key={i}
-            className={`p-2 rounded-lg max-w-[75%] text-sm ${
-              m.sender_id === userId ? "bg-pink-100 ml-auto text-right" : "bg-white text-left"
-            }`}
-          >
-            {m.message && isImageUrl(m.message) ? (
-              <img
-                src={m.message}
-                className="mt-2 w-32 rounded"
-                alt="Image"
-              />
-            ) : (
-              m.message && <div>{m.message}</div>
-            )}
-          </div>
-        ))}
+        {!loading && messages.map((m, i) => {
+          const img = isImageUrl(m.message);
+          const html = /<\/?[a-z][\s\S]*>/i.test(m.message);
+          const time = formatTime(m.created_at);
+          return (
+            <div
+              key={m.id || i}
+              className={`p-2 rounded-lg max-w-[75%] text-sm ${
+                m.sender_id === userId ? "bg-pink-100 ml-auto text-right" : "bg-white text-left"
+              }`}
+            >
+              {html ? (
+                <div dangerouslySetInnerHTML={{ __html: m.message }} />
+              ) : img ? (
+                <img src={m.message} className="mt-2 w-32 rounded" alt="img" />
+              ) : (
+                <div>{m.message}</div>
+              )}
+              <div className="text-xs text-gray-400 mt-1 text-right">{time}</div>
+            </div>
+          );
+        })}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Preview */}
+      {/* Preview Upload */}
       {previewUrl && (
         <div className="p-2">
           <img src={previewUrl} className="w-24 h-24 object-cover rounded mx-auto" alt="preview" />
@@ -162,16 +226,18 @@ export default function ChatBox({ userId, adminId, onClose, adminStatus }) {
         <input
           type="text"
           className="flex-1 border rounded-lg px-3 py-2 text-sm"
-          value={input}
-          onChange={e => setInput(e.target.value)}
           placeholder="Tulis pesan..."
-          onKeyDown={e => e.key === "Enter" && send()}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && onManualSend()}
         />
         <label className="cursor-pointer px-2 border rounded-lg text-gray-600 hover:bg-gray-100">
-          <ImagePlus size={18}/>
-          <input type="file" className="hidden" accept="image/*" onChange={onFile}/>
+          <ImagePlus size={18} />
+          <input type="file" className="hidden" accept="image/*" onChange={onFile} />
         </label>
-        <button onClick={send} className="bg-pink-500 hover:bg-pink-600 text-white px-4 py-2 rounded-lg text-sm">Kirim</button>
+        <button onClick={onManualSend} className="bg-pink-500 hover:bg-pink-600 text-white px-4 py-2 rounded-lg text-sm">
+          Kirim
+        </button>
       </div>
     </div>
   );
