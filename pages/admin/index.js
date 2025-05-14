@@ -66,6 +66,7 @@ const AdminDashboard = () => {
             <Link href="/admin/products" className="hover:text-orange-500">Produk</Link>
             <Link href="/admin/transactions" className="hover:text-orange-500">Pesanan</Link>
             <Link href="/admin/services" className="hover:text-orange-500">Layanan</Link>
+            <Link href="/admin/statistics" className="hover:text-orange-500">Statistik</Link> {/* ✅ Tambahan ini */}
           </nav>
         </aside>
 
